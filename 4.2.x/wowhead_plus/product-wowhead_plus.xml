@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+
+<product productid="wowhead_plus" active="1">
+	<title>wowhead+</title>
+	<description>More advanced wowhead item link integration.</description>
+	<version>1</version>
+	<url />
+	<versioncheckurl />
+	<dependencies>
+	</dependencies>
+	<codes>
+		<code version="*">
+			<installcode><![CDATA[$vbulletin->db->query_write('
+CREATE TABLE IF NOT EXISTS `'.TABLE_PREFIX.'wowhead_cache` (
+  `hash` char(32) NOT NULL,
+  `name` varchar(50) NOT NULL,
+  `itemid` mediumint(6) unsigned NOT NULL,
+  `quality` tinyint(1) unsigned NOT NULL,
+  `created` int(10) unsigned NOT NULL,
+  PRIMARY KEY (`hash`)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+');]]></installcode>
+			<uninstallcode><![CDATA[$vbulletin->db->query_write('DROP TABLE `'.TABLE_PREFIX.'wowhead_cache`');]]></uninstallcode>
+		</code>
+	</codes>
+	<templates>
+	</templates>
+	<stylevardfns>
+	</stylevardfns>
+	<stylevars>
+	</stylevars>
+	<plugins>
+		<plugin active="1" executionorder="5">
+			<title><![CDATA[item > url]]></title>
+			<hookname>bbcode_parse_complete_precache</hookname>
+			<phpcode><![CDATA[// bbcode pattern matching
+$item_bbcode_0 = '/\[item\](<[^>]+>)?%s(<[^>]+>)?\[\/item\]/i';
+$item_bbcode_1 = '((\d+)?\:?((?:\w|\s|\,|\'|\(|\))+)?|(http\:\/\/(\w+)\.wowhead\.com\/item\=\d+))';
+if (preg_match_all(sprintf($item_bbcode_0, $item_bbcode_1), $text, $items, PREG_SET_ORDER)) {
+	// loop through each [item]
+	foreach ($items AS $item) {
+		// skip malformed [item] bbcode
+		if (empty($item[2])) {
+			$text = preg_replace(sprintf($item_bbcode_0, ''), '', $text);
+			continue;
+		}
+
+		// select from the database cache
+		$item_hash = md5(strtolower($item[2]));
+		$cache = $this->registry->db->query_first(sprintf(
+			'SELECT * FROM `'.TABLE_PREFIX.'wowhead_cache` WHERE hash=\'%s\'', $item_hash
+		));
+		
+		// check for a cache hit
+		if (is_array($cache) && !empty($cache)) {
+			// parse bbcode into valid url
+			$text = preg_replace(sprintf($item_bbcode_0, preg_quote($item[2], '/')), 
+				sprintf(
+					'<a href="http://' . (!empty($item[6]) ? $item[6] : 'www') . 
+					'.wowhead.com/item=%d" class="q%d">$1%s$2</a>', 
+					$cache['itemid'], $cache['quality'], $cache['name']
+				), $text
+			);
+		} else {
+			// request item information
+			if (($xml = @file_get_contents(
+				(!empty($item[5]) ? "{$item[5]}&xml" : 
+				sprintf('http://%s.wowhead.com/item=%s&xml', 
+				(!empty($item[6]) ? $item[6] : 'www'),
+				urlencode(!empty($item[3])?$item[3]:$item[4]))), false, 
+				stream_context_create(array('http' => array('header' => 'Host: ' . 
+				(!empty($item[6]) ? $item[6] : 'www') . '.wowhead.com'))))) !== false && 
+				strpos($http_response_header[0], '200') !== false
+			) {
+				// attempt to parse xml
+				if (($xml = simplexml_load_string($xml)) !== false && !isset($xml->error)) {
+					$data = array(
+						'name'    => (string)$xml->item->name,
+						'itemid'  => (int)$xml->item['id'],
+						'quality' => (string)$xml->item->quality['id']
+					);
+					
+					// parse bbcode into valid url
+					$text = preg_replace(sprintf($item_bbcode_0, preg_quote($item[2], '/')), 
+						sprintf(
+							'<a href="http://' . (!empty($item[6]) ? $item[6] : 'www') . 
+							'.wowhead.com/item=%d" class="q%d">$1%s$2</a>', 
+							$data['itemid'], $data['quality'], $data['name']
+						), $text
+					);
+					
+					// insert into the database cache
+					$this->registry->db->query_write(sprintf(
+						'INSERT INTO `'.TABLE_PREFIX.'wowhead_cache` ' . 
+						'(`hash`,`name`,`itemid`,`quality`,`created`) ' . 
+						'VALUES (\'%s\',\'%s\',\'%d\',\'%d\',UNIX_TIMESTAMP())', 
+						$item_hash, $this->registry->db->escape_string($data['name']), 
+						$data['itemid'], $data['quality'])
+					);
+				}
+			}
+		}
+	}
+}]]></phpcode>
+		</plugin>
+		<plugin active="1" executionorder="5">
+			<title><![CDATA[html > item]]></title>
+			<hookname>wysiwyg_parse_start</hookname>
+			<phpcode><![CDATA[$item_urlcode_0 = '/\<a href\="(http\:\/\/(\w+)\.wowhead\.com\/item\=%s)" class\="q\d"\>(<[^>]+>)?%s(<[^>]+>)?\<\/a\>/i';
+$item_urlcode_1 = '((?:\w|\s|\,|\'|\(|\))+)';
+if (preg_match_all(sprintf($item_urlcode_0, '(\d+)', $item_urlcode_1), $parsed, $items, PREG_SET_ORDER)) {
+	// loop through each [item]
+	foreach ($items AS $item) {
+		// mop.wowhead.com
+		if ($item[2] == 'mop') {
+			$parsed = preg_replace(sprintf($item_urlcode_0, "({$item[3]})", $item_urlcode_1), '[item]$4$1$6[/item]', $parsed);
+		} else {
+			$parsed = preg_replace(sprintf($item_urlcode_0, "({$item[3]})", $item_urlcode_1), '[item]$4$3:$5$6[/item]', $parsed);
+		}
+	}
+}]]></phpcode>
+		</plugin>
+	</plugins>
+	<phrases>
+	</phrases>
+	<options>
+	</options>
+	<helptopics>
+	</helptopics>
+	<cronentries>
+	</cronentries>
+	<faqentries>
+	</faqentries>
+	<navigation>
+	</navigation>
+</product>
